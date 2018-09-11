@@ -8,5 +8,3 @@ clap = "2.32"
 crossbeam-channel = "0.2"
 walkdir = "2"
 num_cpus = "1.8"
-md-5 = "0.7"
-digest = { version = "0.7", features = ["std"]}

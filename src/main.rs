@@ -22,11 +22,21 @@ fn main() {
             .help("Directory to capture")
             .required(true)
             .index(1))
+        .arg( Arg::with_name("threads")
+            .help("Number of threads to use")
+            .number_of_values(1)
+            .short("t"))
         .get_matches();
 
     let (file_sender, file_receiver): (channel::Sender<DirEntry>, channel::Receiver<DirEntry>) = channel::bounded(10000);
 
-    let threads = (0..num_cpus::get() - 1).map(move |x| {
+    let num_threads = matches
+        .value_of("threads")
+        .map(|x| x.parse::<usize>())
+        .unwrap_or(Ok(num_cpus::get()))
+        .unwrap();
+
+    let threads = (0..num_threads).map(move |x| {
         let local_receiver = file_receiver.clone();
 
         let thread_builder = thread::Builder::new()
@@ -52,5 +62,11 @@ fn main() {
     for entry in WalkDir::new(matches.value_of("directory").unwrap()) {
         let entry = entry.unwrap();
         file_sender.send(entry);
+    }
+
+    drop(file_sender);
+
+    for thread in threads {
+        thread.join().unwrap();
     }
 }
