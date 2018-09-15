@@ -5,6 +5,5 @@ authors = ["Matt McClellan <mcclellan.mj@gmail.com>"]
 
 [dependencies]
 clap = "2.32"
-crossbeam-channel = "0.2"
 walkdir = "2"
-num_cpus = "1.8"
+csv = "1"
