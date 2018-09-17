@@ -7,3 +7,5 @@ authors = ["Matt McClellan <mcclellan.mj@gmail.com>"]
 clap = "2.32"
 walkdir = "2"
 csv = "1"
+serde = "1"
+serde_derive = "1"

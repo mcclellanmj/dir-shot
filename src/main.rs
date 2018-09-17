@@ -2,16 +2,18 @@ extern crate clap;
 extern crate walkdir;
 extern crate csv;
 
+#[macro_use]
+extern crate serde_derive;
+
 use clap::{Arg, App, SubCommand, ArgMatches};
 use walkdir::WalkDir;
-use walkdir::DirEntry;
-use std::fs::File;
 use std::path::PathBuf;
-use std::io::{Read, stdout};
-use std::str;
-use csv::Writer;
+use std::io::stdout;
 use std::time::SystemTime;
+use std::collections::BTreeMap;
+use std::borrow::Cow;
 
+#[derive(Debug, Serialize, Deserialize)]
 struct FileSnap {
     path: PathBuf,
     modified: u64,
@@ -27,7 +29,6 @@ fn as_row(file_snap: &FileSnap) -> Vec<String> {
 
 fn run_record(args: &ArgMatches) {
     let mut csv_writer = csv::Writer::from_writer(stdout());
-    csv_writer.write_record(&["Path", "Modified", "Size"]);
 
     for entry in WalkDir::new(args.value_of("directory").unwrap()) {
         let entry = entry.unwrap();
@@ -39,8 +40,20 @@ fn run_record(args: &ArgMatches) {
             size: metadata.len()
         };
 
-        csv_writer.write_record(as_row(&file_snap)).expect("An error occurred while writing the row");
+        csv_writer.serialize(file_snap).expect("An error occurred while writing the row");
     }
+}
+
+fn run_compare(args: &ArgMatches) {
+    let mut original_snap = BTreeMap::new();
+    let mut reader = csv::Reader::from_path(args.value_of("listing1").unwrap()).unwrap();
+
+    for result in reader.deserialize() {
+        let record: FileSnap = result.unwrap();
+
+        original_snap.insert(record.path.clone(), record);
+    }
+    unimplemented!("Not yet implemented");
 }
 
 fn main() {
@@ -53,11 +66,23 @@ fn main() {
                 .required(true)
                 .index(1))
             .about("Record directory capture to stdout"))
+        .subcommand(SubCommand::with_name("compare")
+            .arg(Arg::with_name("listing1")
+                .help("Older listing of files")
+                .required(true)
+                .index(1))
+            .arg(Arg::with_name("listing2")
+                .help("Newer listing of files")
+                .required(true)
+                .index(2))
+            .about("Compare two previous outputs from this for differences")
+        )
         .get_matches();
 
     match matches.subcommand() {
         ("record", Some(m)) => run_record(m),
-        _ => println!("Unknown command")
+        ("compare", Some(m)) => run_compare(m),
+        _ => panic!("Subcommand not implemented")
     }
 
 }
