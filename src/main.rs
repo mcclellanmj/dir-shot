@@ -20,11 +20,12 @@ struct FileSnap {
     size: u64
 }
 
-fn as_row(file_snap: &FileSnap) -> Vec<String> {
-    vec!(file_snap.path.display().to_string(),
-         file_snap.modified.to_string(),
-         file_snap.size.to_string()
-    )
+#[derive(Debug)]
+enum FileStatus {
+    Same,
+    Changed,
+    New,
+    Deleted
 }
 
 fn run_record(args: &ArgMatches) {
@@ -44,16 +45,48 @@ fn run_record(args: &ArgMatches) {
     }
 }
 
+fn calculate_change(newest: &FileSnap, oldest_option: &Option<FileSnap>) -> FileStatus {
+    if let Some(oldest) = oldest_option {
+        if newest.modified != oldest.modified {
+            FileStatus::Changed
+        } else if newest.size != oldest.size {
+            FileStatus::Changed
+        } else {
+            FileStatus::Same
+        }
+    } else {
+        FileStatus::New
+    }
+}
+
 fn run_compare(args: &ArgMatches) {
     let mut original_snap = BTreeMap::new();
-    let mut reader = csv::Reader::from_path(args.value_of("listing1").unwrap()).unwrap();
+    {
+        let mut reader = csv::Reader::from_path(args.value_of("listing1").unwrap()).unwrap();
 
-    for result in reader.deserialize() {
-        let record: FileSnap = result.unwrap();
+        for result in reader.deserialize() {
+            let record: FileSnap = result.unwrap();
 
-        original_snap.insert(record.path.clone(), record);
+            original_snap.insert(record.path.clone(), record);
+        }
     }
-    unimplemented!("Not yet implemented");
+
+    {
+        let mut reader = csv::Reader::from_path(args.value_of("listing2").unwrap()).unwrap();
+
+        for result in reader.deserialize() {
+            let record: FileSnap = result.unwrap();
+
+            let original_file = original_snap.remove(&record.path);
+
+            let diff = calculate_change(&record, &original_file);
+            println!("{} is {:?}", record.path.display(), diff);
+        }
+    }
+
+    for (key, value) in original_snap.iter() {
+        println!("[{}] was deleted", key.display());
+    }
 }
 
 fn main() {
