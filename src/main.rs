@@ -30,29 +30,27 @@ enum FileStatus {
 fn run_capture(args: &ArgMatches) {
     let mut csv_writer = csv::Writer::from_writer(stdout());
 
-    let dir = WalkDir::new(args.value_of("directory").unwrap())
-        .into_iter()
-        .filter_entry(|x| !x.file_type().is_file());
+    let dir = WalkDir::new(args.value_of("directory").unwrap());
 
     for entry in dir {
         let entry = entry.unwrap();
         let metadata = entry.metadata().unwrap();
 
-        let file_snap = FileSnap {
-            path: entry.path().to_owned(),
-            modified: metadata.modified().unwrap().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
-            size: metadata.len()
-        };
+        if metadata.is_file() {
+            let file_snap = FileSnap {
+                path: entry.path().to_owned(),
+                modified: metadata.modified().unwrap().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+                size: metadata.len()
+            };
 
-        csv_writer.serialize(file_snap).expect("An error occurred while writing the row");
+            csv_writer.serialize(file_snap).expect("An error occurred while writing the row");
+        }
     }
 }
 
 fn calculate_change(newest: &FileSnap, oldest_option: &Option<FileSnap>) -> FileStatus {
     if let Some(oldest) = oldest_option {
-        if newest.modified != oldest.modified {
-            FileStatus::Changed
-        } else if newest.size != oldest.size {
+        if newest.modified != oldest.modified || newest.size != oldest.size {
             FileStatus::Changed
         } else {
             FileStatus::Same
@@ -135,7 +133,6 @@ fn main() {
     match matches.subcommand() {
         ("capture", Some(m)) => run_capture(m),
         ("compare", Some(m)) => run_compare(m),
-        _ => panic!("Subcommand not implemented")
+        (x, _) => panic!("Subcommand [{}] is not implemented", x)
     }
-
 }
