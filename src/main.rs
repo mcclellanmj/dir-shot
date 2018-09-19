@@ -7,11 +7,10 @@ extern crate serde_derive;
 
 use clap::{Arg, App, SubCommand, ArgMatches};
 use walkdir::WalkDir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::io::stdout;
 use std::time::SystemTime;
 use std::collections::BTreeMap;
-use std::borrow::Cow;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct FileSnap {
@@ -20,7 +19,7 @@ struct FileSnap {
     size: u64
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum FileStatus {
     Same,
     Changed,
@@ -28,10 +27,14 @@ enum FileStatus {
     Deleted
 }
 
-fn run_record(args: &ArgMatches) {
+fn run_capture(args: &ArgMatches) {
     let mut csv_writer = csv::Writer::from_writer(stdout());
 
-    for entry in WalkDir::new(args.value_of("directory").unwrap()) {
+    let dir = WalkDir::new(args.value_of("directory").unwrap())
+        .into_iter()
+        .filter_entry(|x| !x.file_type().is_file());
+
+    for entry in dir {
         let entry = entry.unwrap();
         let metadata = entry.metadata().unwrap();
 
@@ -59,8 +62,22 @@ fn calculate_change(newest: &FileSnap, oldest_option: &Option<FileSnap>) -> File
     }
 }
 
+fn print_status(show_same: bool, path: &Path, diff: &FileStatus) {
+    let diff_str = match diff {
+        FileStatus::Same => "S",
+        FileStatus::Changed => "C",
+        FileStatus::Deleted => "D",
+        FileStatus::New => "N"
+    };
+
+    if FileStatus::Same != *diff || (FileStatus::Same == *diff && show_same) {
+        println!("{} {}", diff_str, path.display());
+    }
+}
+
 fn run_compare(args: &ArgMatches) {
     let mut original_snap = BTreeMap::new();
+    let show_same = args.is_present("show_same");
     {
         let mut reader = csv::Reader::from_path(args.value_of("listing1").unwrap()).unwrap();
 
@@ -80,12 +97,13 @@ fn run_compare(args: &ArgMatches) {
             let original_file = original_snap.remove(&record.path);
 
             let diff = calculate_change(&record, &original_file);
-            println!("{} is {:?}", record.path.display(), diff);
+
+            print_status(show_same, &record.path, &diff);
         }
     }
 
-    for (key, value) in original_snap.iter() {
-        println!("[{}] was deleted", key.display());
+    for (key, _) in original_snap.iter() {
+        print_status(show_same, key, &FileStatus::Deleted);
     }
 }
 
@@ -93,7 +111,7 @@ fn main() {
     let matches = App::new("Directory Capture")
         .version("0.0.1")
         .author("Matt McClellan <mcclellan.mj@gmail.com>")
-        .subcommand(SubCommand::with_name("record")
+        .subcommand(SubCommand::with_name("capture")
             .arg(Arg::with_name("directory")
                 .help("Directory to capture")
                 .required(true)
@@ -108,12 +126,14 @@ fn main() {
                 .help("Newer listing of files")
                 .required(true)
                 .index(2))
-            .about("Compare two previous outputs from this for differences")
-        )
+            .arg(Arg::with_name("show_same")
+                .help("Show files that did not change")
+                .short("s"))
+            .about("Compare two previous outputs from this for differences"))
         .get_matches();
 
     match matches.subcommand() {
-        ("record", Some(m)) => run_record(m),
+        ("capture", Some(m)) => run_capture(m),
         ("compare", Some(m)) => run_compare(m),
         _ => panic!("Subcommand not implemented")
     }
