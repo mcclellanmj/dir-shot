@@ -1,0 +1,7 @@
+CREATE TABLE file_snaps (
+  id INTEGER NOT NULL PRIMARY KEY,
+  path VARCHAR NOT NULL,
+  modified INTEGER NOT NULL,
+  size INTEGER NOT NULL,
+  record_date INTEGER NOT NULL
+)
