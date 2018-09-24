@@ -1,9 +1,9 @@
 table! {
-    filesnaps(id) {
+    file_snaps {
         id -> Integer,
-        path -> Text,
+        path -> Varchar,
         modified -> Integer,
         size -> Integer,
-        snap_date -> Integer
+        record_date -> Integer,
     }
 }

@@ -1,8 +1,14 @@
+#![allow(proc_macro_derive_resolution_fallback)]
+
 extern crate clap;
 extern crate walkdir;
+
+#[macro_use]
 extern crate diesel;
 #[macro_use]
 extern crate diesel_migrations;
+
+pub mod schema;
 
 use clap::{Arg, App, SubCommand, ArgMatches};
 use walkdir::WalkDir;
@@ -11,15 +17,26 @@ use std::io::stdout;
 use std::time::SystemTime;
 use std::collections::BTreeMap;
 use diesel::prelude::*;
+use schema::*;
 
 embed_migrations!("migrations");
 
-#[derive(Debug)]
+#[derive(Debug, Queryable)]
 struct FileSnap {
-    path: PathBuf,
-    modified: u64,
-    size: u64,
-    snapdate: u64
+    id: i32,
+    path: String,
+    modified: i32,
+    size: i32,
+    record_date: i32
+}
+
+#[derive(Debug, Insertable)]
+#[table_name = "file_snaps"]
+struct NewSnap {
+    path: String,
+    modified: i32,
+    size: i32,
+    record_date: i32
 }
 
 #[derive(Debug, PartialEq)]
