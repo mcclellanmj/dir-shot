@@ -1,153 +1,111 @@
-#![allow(proc_macro_derive_resolution_fallback)]
-
 extern crate clap;
 extern crate walkdir;
+extern crate rusqlite;
+extern crate time;
+extern crate cast;
 
-#[macro_use]
-extern crate diesel;
-#[macro_use]
-extern crate diesel_migrations;
-
-pub mod schema;
-
+use rusqlite::Connection;
 use clap::{Arg, App, SubCommand, ArgMatches};
 use walkdir::WalkDir;
 use std::path::{Path, PathBuf};
 use std::io::stdout;
 use std::time::SystemTime;
 use std::collections::BTreeMap;
-use diesel::prelude::*;
-use schema::*;
+use std::time::UNIX_EPOCH;
+use cast::i64;
 
-embed_migrations!("migrations");
+const CREATE_SQL: &'static str = include_str!("sql/create.sql");
+const DIFF_SQL: &'static str = include_str!("sql/diff.sql");
+const LATEST_SQL: &'static str = include_str!("sql/latest_record_dates.sql");
 
-#[derive(Debug, Queryable)]
+#[derive(Debug)]
 struct FileSnap {
-    id: i32,
     path: String,
-    modified: i32,
-    size: i32,
-    record_date: i32
-}
-
-#[derive(Debug, Insertable)]
-#[table_name = "file_snaps"]
-struct NewSnap {
-    path: String,
-    modified: i32,
-    size: i32,
-    record_date: i32
-}
-
-#[derive(Debug, PartialEq)]
-enum FileStatus {
-    Same,
-    Changed,
-    New,
-    Deleted
+    modified: i64,
+    size: i64,
+    record_date: i64
 }
 
 fn print_walk_error(err: walkdir::Error) {
-    eprintln!("Got an error");
+    eprintln!("Got an error on file {}", err.path().unwrap().display());
 }
 
-fn run_capture(database: diesel::SqliteConnection, args: &ArgMatches) {
-    unimplemented!("Capture not yet implemented")
-    /*
-    let mut csv_writer = csv::Writer::from_writer(stdout());
-
+fn run_capture(connection: &mut Connection, args: &ArgMatches) {
     let dir = WalkDir::new(args.value_of("directory").unwrap());
+    let start =
+        i64(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())
+            .expect("Unable to cast from u64 to i64, date too large");
+    let tx = connection.transaction().unwrap();
 
     for entry in dir {
-        let entry = entry;
-
         match entry {
             Ok(entry) => {
                 let metadata = entry.metadata().unwrap();
 
                 if metadata.is_file() {
-                    let file_snap = FlatSnap {
-                        path: entry.path().to_owned(),
-                        modified: metadata.modified().unwrap().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
-                        size: metadata.len()
+                    let file_snap = FileSnap {
+                        path: entry.path().display().to_string(),
+                        modified: i64(metadata.modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs()).expect("Modified date too large to convert from u64 to i64"),
+                        size: i64(metadata.len()).expect("Filesize too large to convert from unsigned to signed i64"),
+                        record_date: start
                     };
 
-                    csv_writer.serialize(file_snap).expect("An error occurred while writing the row");
+                    tx.execute("INSERT INTO file_snaps (path, modified, size, record_date)\
+                        VALUES (?, ?, ?, ?)",
+                        &[&file_snap.path, &file_snap.modified, &file_snap.size, &file_snap.record_date]).unwrap();
                 }
             },
             Err(e) => print_walk_error(e)
         }
-
     }
-    */
+
+    tx.commit().unwrap();
 }
 
-fn calculate_change(newest: &FileSnap, oldest_option: &Option<FileSnap>) -> FileStatus {
-    if let Some(oldest) = oldest_option {
-        if newest.modified != oldest.modified || newest.size != oldest.size {
-            FileStatus::Changed
-        } else {
-            FileStatus::Same
-        }
-    } else {
-        FileStatus::New
+fn find_dates(connection: &Connection) -> (i64, i64) {
+    let mut statement = connection.prepare(LATEST_SQL).unwrap();
+    let mut results = statement.query(&[]).unwrap();
+
+    let first = results.next()
+        .expect("Expected to have 2 dates in database but had 0.")
+        .expect("Failed while executing query to find latest dates.")
+        .get(0);
+
+    let second = results.next()
+        .expect("Expected to have 2 dates in database but only had 1.")
+        .expect("Failed while executing query to find latest dates.")
+        .get(0);
+
+    (first, second)
+}
+
+fn run_compare(connection: &Connection, args: &ArgMatches) {
+    let (first_date, second_date) = find_dates(connection);
+
+    println!("Finding difference between dates [{}] and [{}]", first_date, second_date);
+
+    let mut statement = connection.prepare(DIFF_SQL).unwrap();
+    let mut results = statement.query(&[&first_date, &second_date]).unwrap();
+
+    while let Some(result_row) = results.next() {
+        let row = result_row.unwrap();
+        let status: String = row.get(0);
+        let file_name: String = row.get(1);
+        println!("Status [{}], file [{}]", status, file_name);
     }
 }
 
-fn print_status(show_same: bool, path: &Path, diff: &FileStatus) {
-    let diff_str = match diff {
-        FileStatus::Same => "S",
-        FileStatus::Changed => "C",
-        FileStatus::Deleted => "D",
-        FileStatus::New => "N"
-    };
+fn create_tables(connection: &Connection) {
+    // FIXME: This needs to return an error instead of panicking
+    let table_query : Result<(), rusqlite::Error> = connection.execute_batch(CREATE_SQL);
 
-    if FileStatus::Same != *diff || (FileStatus::Same == *diff && show_same) {
-        println!("{} {}", diff_str, path.display());
-    }
-}
-
-fn run_compare(args: &ArgMatches) {
-    unimplemented!("Not implemented")
-    /*
-    let mut original_snap = BTreeMap::new();
-    let show_same = args.is_present("show_same");
-    {
-        let mut reader = csv::Reader::from_path(args.value_of("listing1").unwrap()).unwrap();
-
-        for result in reader.deserialize() {
-            let record: FileSnap = result.unwrap();
-
-            original_snap.insert(record.path, record.state);
-        }
-    }
-
-    {
-        let mut reader = csv::Reader::from_path(args.value_of("listing2").unwrap()).unwrap();
-
-        for result in reader.deserialize() {
-            let record: FileSnap = result.unwrap();
-            let original_filepub fn establish_connection() -> SqliteConnection {
-    dotenv().ok();
-
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    SqliteConnection::establish(&database_url)
-        .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
-} = original_snap.remove(&record.path);
-
-            let diff = calculate_change(&record, &original_file);
-            print_status(show_same, &record.path, &diff);
+    match table_query {
+        Ok(_) => println!("Table creation ok"),
+        Err(e) => {
+            println!("Get error {:?}", e);
+            panic!("Failed to create table")
         }
     }
-
-    for (key, _) in original_snap.iter() {
-        print_status(show_same, key, &FileStatus::Deleted);
-    }
-    */
-}
-
-fn establish_connection(database_url: &str) -> diesel::SqliteConnection {
-    SqliteConnection::establish(database_url).expect("Unable to open database")
 }
 
 fn main() {
@@ -167,28 +125,21 @@ fn main() {
                 .index(1))
             .about("Record directory capture to stdout"))
         .subcommand(SubCommand::with_name("compare")
-            .arg(Arg::with_name("listing1")
-                .help("Older listing of files")
-                .required(true)
-                .index(1))
-            .arg(Arg::with_name("listing2")
-                .help("Newer listing of files")
-                .required(true)
-                .index(2))
-            .arg(Arg::with_name("show_same")
-                .help("Show files that did not change")
-                .short("s"))
             .about("Compare two previous outputs from this for differences"))
+        .subcommand( SubCommand::with_name("list-captures") )
+            .about("Prints a list of all the dates captured")
         .get_matches();
 
-    let mut database = establish_connection(
-        matches.value_of("database").unwrap());
+    let mut connection =
+        Connection::open(matches.value_of("database").unwrap()).unwrap();
 
-    embedded_migrations::run_with_output(&database, &mut stdout());
+    create_tables(&connection);
 
     match matches.subcommand() {
-        ("capture", Some(m)) => run_capture(database, m),
-        ("compare", Some(m)) => run_compare(m),
+        ("capture", Some(m)) => run_capture(&mut connection, m),
+        ("compare", Some(m)) => run_compare(&connection, m),
         (x, _) => panic!("Subcommand [{}] is not implemented", x)
     }
+
+    connection.close().unwrap();
 }
