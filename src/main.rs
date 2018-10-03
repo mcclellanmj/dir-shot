@@ -3,8 +3,9 @@ extern crate walkdir;
 extern crate rusqlite;
 extern crate time;
 extern crate cast;
+extern crate lru;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use clap::{Arg, App, SubCommand, ArgMatches};
 use walkdir::WalkDir;
 use std::path::{Path, PathBuf};
@@ -13,10 +14,53 @@ use std::time::SystemTime;
 use std::collections::BTreeMap;
 use std::time::UNIX_EPOCH;
 use cast::i64;
+use lru::LruCache;
 
 const CREATE_SQL: &'static str = include_str!("sql/create.sql");
 const DIFF_SQL: &'static str = include_str!("sql/diff.sql");
 const LATEST_SQL: &'static str = include_str!("sql/latest_record_dates.sql");
+const SELECT_PATH: &'static str = include_str!("sql/select_path.sql");
+const INSERT_PATH: &'static str = include_str!("sql/insert_path.sql");
+
+struct PathCache {
+    cache: LruCache<String, i64>
+}
+
+impl PathCache {
+    fn new() -> PathCache {
+        PathCache {
+            cache: LruCache::new(4)
+        }
+    }
+
+    fn get_path_id(&mut self, tx: &Transaction, path: &PathBuf) -> i64 {
+        let path_string = path.display().to_string();
+
+        if self.cache.contains(&path_string) {
+            *self.cache.get(&path_string).unwrap()
+        } else {
+            let mut stmt = tx.prepare(SELECT_PATH).unwrap();
+            let mut results = stmt.query(&[&path_string]).unwrap();
+
+            let id = results.next();
+
+            match id {
+                Some(row) => {
+                    let id = row.unwrap().get(0);
+                    self.cache.put(path_string, id);
+                    id
+                },
+                None => {
+                    let mut insert_statement = tx.prepare(INSERT_PATH).unwrap();
+                    let id = insert_statement.insert(&[&path_string]).unwrap();
+
+                    self.cache.put(path_string, id);
+                    id
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 struct FileSnap {
@@ -37,6 +81,7 @@ fn run_capture(connection: &mut Connection, args: &ArgMatches) {
             .expect("Unable to cast from u64 to i64, date too large");
     let tx = connection.transaction().unwrap();
 
+    let mut cache = PathCache::new();
     for entry in dir {
         match entry {
             Ok(entry) => {
@@ -50,9 +95,17 @@ fn run_capture(connection: &mut Connection, args: &ArgMatches) {
                         record_date: start
                     };
 
-                    tx.execute("INSERT INTO file_snaps (path, modified, size, record_date)\
-                        VALUES (?, ?, ?, ?)",
-                        &[&file_snap.path, &file_snap.modified, &file_snap.size, &file_snap.record_date]).unwrap();
+                    let option_parent = entry.path().parent();
+
+                    if let Some(parent) = option_parent {
+                        let id = cache.get_path_id(&tx, &parent.to_path_buf());
+                        let file_name = entry.path().file_name().unwrap().to_string_lossy();
+
+                        tx.execute("INSERT INTO file_snaps (path_id, file_name, modified, size, record_date)\
+                        VALUES (?, ?, ?, ?, ?)",
+                                   &[&id, &file_name, &file_snap.modified, &file_snap.size, &file_snap.record_date]).unwrap();
+                    } else {}
+
                 }
             },
             Err(e) => print_walk_error(e)

@@ -1,0 +1,1 @@
+INSERT INTO paths (path) VALUES (?);
