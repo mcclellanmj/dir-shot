@@ -15,15 +15,22 @@ use std::collections::BTreeMap;
 use std::time::UNIX_EPOCH;
 use cast::i64;
 use lru::LruCache;
+use std::os::unix::ffi::OsStringExt;
 
 const CREATE_SQL: &'static str = include_str!("sql/create.sql");
 const DIFF_SQL: &'static str = include_str!("sql/diff.sql");
 const LATEST_SQL: &'static str = include_str!("sql/latest_record_dates.sql");
-const SELECT_PATH: &'static str = include_str!("sql/select_path.sql");
-const INSERT_PATH: &'static str = include_str!("sql/insert_path.sql");
+const SELECT_PATH: &'static str = include_str!("sql/select_name.sql");
+const INSERT_PATH: &'static str = include_str!("sql/insert_file_name.sql");
+
+enum ErrorKind { DatabaseState(&'static str) }
+
+struct ApplicationError {
+    kind: ErrorKind
+}
 
 struct PathCache {
-    cache: LruCache<String, i64>
+    cache: LruCache<Vec<u8>, i64>
 }
 
 impl PathCache {
@@ -33,8 +40,8 @@ impl PathCache {
         }
     }
 
-    fn get_path_id(&mut self, tx: &Transaction, path: &PathBuf) -> i64 {
-        let path_string = path.display().to_string();
+    fn get_name_id(&mut self, tx: &Transaction, path: &Path) -> i64 {
+        let path_string: Vec<u8> = path.to_path_buf().into_os_string().into_vec();
 
         if self.cache.contains(&path_string) {
             *self.cache.get(&path_string).unwrap()
@@ -95,16 +102,11 @@ fn run_capture(connection: &mut Connection, args: &ArgMatches) {
                         record_date: start
                     };
 
-                    let option_parent = entry.path().parent();
+                    let id = cache.get_name_id(&tx, &entry.path());
 
-                    if let Some(parent) = option_parent {
-                        let id = cache.get_path_id(&tx, &parent.to_path_buf());
-                        let file_name = entry.path().file_name().unwrap().to_string_lossy();
-
-                        tx.execute("INSERT INTO file_snaps (path_id, file_name, modified, size, record_date)\
-                        VALUES (?, ?, ?, ?, ?)",
-                                   &[&id, &file_name, &file_snap.modified, &file_snap.size, &file_snap.record_date]).unwrap();
-                    } else {}
+                    tx.execute("INSERT INTO file_snaps (name_id, modified, size, record_date)\
+                    VALUES (?, ?, ?, ?)",
+                       &[&id, &file_snap.modified, &file_snap.size, &file_snap.record_date]).unwrap();
 
                 }
             },
@@ -143,8 +145,8 @@ fn run_compare(connection: &Connection, args: &ArgMatches) {
     while let Some(result_row) = results.next() {
         let row = result_row.unwrap();
         let status: String = row.get(0);
-        let file_name: String = row.get(1);
-        println!("Status [{}], file [{}]", status, file_name);
+        let file_name: Vec<u8> = row.get(1);
+        println!("Status [{}], file [{}]", status, std::str::from_utf8(&file_name).unwrap());
     }
 }
 
